@@ -4,6 +4,7 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import os from "os";
 import fs from "fs/promises";
+import fetch from "node-fetch";
 
 config();
 
@@ -14,6 +15,7 @@ const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
 });
 
+const GOOGLE_MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 
 
 async function execCommand({ command }) {
@@ -39,7 +41,7 @@ async function openWebsite({ url }) {
   const commands = {
     win32: `start ${url}`,
     darwin: `open ${url}`,
-    linux: `xdg-open ${url}`,
+    linux: `xdg-open "${url}"`,
   };
   return execCommand({ command: commands[platform] });
 }
@@ -64,12 +66,45 @@ async function writeFile({ path, content }) {
   }
 }
 
+const HARDCODED_ORIGIN = "NCER College of Engineering, Pune, Maharashtra, India";
+
+async function getDirections({ destination }) {
+  // Only one API call to Directions API
+  const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${encodeURIComponent(
+    HARDCODED_ORIGIN
+  )}&destination=${encodeURIComponent(destination)}&key=${GOOGLE_MAPS_API_KEY}`;
+
+  const response = await fetch(url);
+  const data = await response.json();
+
+  if (data.status !== "OK") {
+    throw new Error(`Google Maps API error: ${data.status}`);
+  }
+
+  const steps = data.routes[0].legs[0].steps.map(
+    (step, index) => `${index + 1}. ${step.html_instructions.replace(/<[^>]+>/g, "")}`
+  );
+
+  const guiLink = `https://www.google.com/maps/dir/?api=1&origin=${encodeURIComponent(
+    HARDCODED_ORIGIN
+  )}&destination=${encodeURIComponent(destination)}&travelmode=driving`;
+
+  return {
+    steps: steps.join(". "),
+    guiLink,
+  };
+}
+
+
+
+
 const toolFunctions = {
   execCommand,
   openApp,
   openWebsite,
   openFolder,
-  writeFile
+  writeFile,
+  getDirections,
 };
 
 const tools = [
@@ -78,59 +113,39 @@ const tools = [
       {
         name: "execCommand",
         description: "Run any terminal/command line instruction",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            command: { type: Type.STRING },
-          },
-          required: ["command"],
-        },
+        parameters: { type: Type.OBJECT, properties: { command: { type: Type.STRING } }, required: ["command"] },
       },
       {
         name: "openApp",
         description: "Opens a desktop application (e.g. Chrome, VSCode, etc.)",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            app: { type: Type.STRING },
-          },
-          required: ["app"],
-        },
+        parameters: { type: Type.OBJECT, properties: { app: { type: Type.STRING } }, required: ["app"] },
       },
       {
         name: "openWebsite",
         description: "Opens a URL in the default browser",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            url: { type: Type.STRING },
-          },
-          required: ["url"],
-        },
+        parameters: { type: Type.OBJECT, properties: { url: { type: Type.STRING } }, required: ["url"] },
       },
       {
         name: "openFolder",
         description: "Opens a folder in File Explorer or Finder",
-        parameters: {
-          type: Type.OBJECT,
-          properties: {
-            path: { type: Type.STRING },
-          },
-          required: ["path"],
-        },
+        parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING } }, required: ["path"] },
       },
       {
         name: "writeFile",
         description: "Creates or overwrites a file with content",
+        parameters: { type: Type.OBJECT, properties: { path: { type: Type.STRING }, content: { type: Type.STRING } }, required: ["path", "content"] },
+      },
+      {
+        name: "getDirections",
+        description: "Get step-by-step directions from NCER College of Engineering Pune to a destination",
         parameters: {
           type: Type.OBJECT,
           properties: {
-            path: { type: Type.STRING },
-            content: { type: Type.STRING },
+            destination: { type: Type.STRING },
           },
-          required: ["path", "content"],
+          required: ["destination"],
         },
-      }
+      },
     ],
   },
 ];
@@ -139,24 +154,18 @@ const tools = [
 export async function runAgent(inputText) {
   console.log("🚀 runAgent called with input:", inputText);
 
-  const contents = [
-    {
-      role: "user",
-      parts: [{ text: inputText }],
-    },
-  ];
-
+  const contents = [{ role: "user", parts: [{ text: inputText }] }];
 
   const result = await ai.models.generateContent({
     model: "gemini-2.5-flash-lite",
     contents,
     config: {
       systemInstruction: `
-You are an AI assistant with full desktop access through tools. You can open apps, browse websites, manage files, and run terminal commands.
+You are an AI assistant with full desktop access through tools. You can open apps, browse websites, manage files, run terminal commands, and get Google Maps directions from NCER College of Engineering Pune.
 
 Platform: ${platform}
 
-Respond in a short, conversational summary (20–30 words). Do not give instructions. Use direct tool calls only. Avoid symbols, patterns, or formatting to keep the output consistent for narration.
+Respond in a short, conversational summary (20–30 words). Use direct tool calls only. Avoid symbols, patterns, or formatting for narration.
 `,
       tools,
     },
@@ -176,8 +185,13 @@ Respond in a short, conversational summary (20–30 words). Do not give instruct
       }
 
       console.log(`🛠 Calling function: ${name} with args:`, args);
-      const response = await toolFn(args);
-      // responses.push(`✅ Tool '${name}' executed. Result: ${response}`);
+      const responseObj = await toolFn(args);
+      if (typeof responseObj === "object") {
+        responses.push(`Steps:\n${responseObj.steps}\n\nMap Link: ${responseObj.guiLink}`);
+      } else {
+        responses.push(responseObj);
+      }
+
     }
 
     return responses.join("\n");
@@ -185,4 +199,3 @@ Respond in a short, conversational summary (20–30 words). Do not give instruct
 
   return result.text;
 }
-
