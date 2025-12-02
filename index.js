@@ -6,6 +6,8 @@ import say from "say";
 import { runAgent } from "./ollama.js";
 import { config } from "dotenv";
 
+import { runAgent } from "./Access.js";
+import { config } from "dotenv";
 config();
 
 const client = new AssemblyAI({
@@ -40,13 +42,16 @@ async function startAssistant() {
     const transcriptText = turn.transcript?.trim();
     if (!transcriptText) return;
     console.log(transcriptText);
-
     const normalized = transcriptText
       .toLowerCase()
       .replace(/[^\w\s]|_/g, "")
       .trim();
 
     if (normalized === lastTranscriptNormalized) return;
+    if (normalized === lastTranscriptNormalized) {
+      return;
+    }
+
     lastTranscriptNormalized = normalized;
 
     console.log(`🎤 You said: "${transcriptText}"`);
@@ -59,6 +64,12 @@ async function startAssistant() {
     } catch (err) {
       console.error("❌ Error:", err.message);
       say.speak("Sorry, I encountered an error while processing your request.");
+      say.stop()
+      say.speak(agentResponse, 'Microsoft David Desktop',1.15);
+
+    } catch (err) {
+      console.error("❌ Error running agent:", err.message);
+      say.speak("Sorry, I encountered an error.");
     }
   });
 
@@ -78,6 +89,7 @@ async function startAssistant() {
 
     process.on("SIGINT", async () => {
       say.stop();
+      say.stop()
       console.log("\n🛑 Stopping microphone...");
       recording.stop();
 
